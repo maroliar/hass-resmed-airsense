@@ -1,0 +1,378 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "description": "Escolha a máquina para parear.",
+        "data": {
+          "address": "Dispositivo"
+        }
+      },
+      "connect": {
+        "title": "Parear {name}",
+        "description": "A máquina aceita só um app pareado: parear o Home Assistant substitui o pareamento Bluetooth do app myAir (e parear o app de novo desconecta o Home Assistant). Os relatórios de cada noite continuam chegando no app myAir, que os recebe da nuvem da ResMed pela rede celular da máquina; só deixam de funcionar as funções do app que usam Bluetooth (teste de máscara, ajustar o conforto pelo celular).\n\nColoque a máquina em modo de pareamento Bluetooth e clique em Enviar. O Home Assistant vai se conectar a ela."
+      },
+      "code": {
+        "title": "Digite o código",
+        "description": "Digite o código que aparece agora na tela da máquina.",
+        "data": {
+          "passkey": "Código"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Não foi possível conectar à máquina. Verifique se ela está ligada, em modo de pareamento e ao alcance de um adaptador Bluetooth ou de um proxy Bluetooth ESPHome com conexões ativas habilitadas.",
+      "invalid_code": "A máquina recusou o código. Confira a tela e tente de novo."
+    },
+    "abort": {
+      "already_configured": "Esta máquina já está configurada.",
+      "no_devices_found": "Nenhuma máquina ResMed encontrada por Bluetooth. Acorde-a ou entre no modo de pareamento e tente de novo.",
+      "reauth_successful": "Pareado de novo com sucesso."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "therapy": {
+        "name": "Terapia"
+      },
+      "connected": {
+        "name": "Conectado"
+      }
+    },
+    "sensor": {
+      "fg_state": {
+        "name": "Estado"
+      },
+      "test_drive_state": {
+        "name": "Test drive"
+      },
+      "recoverable_error": {
+        "name": "Erro recuperável"
+      },
+      "system_error": {
+        "name": "Erro de sistema"
+      },
+      "live_mask_pressure": {
+        "name": "Pressão na máscara"
+      },
+      "live_inspiratory_pressure": {
+        "name": "Pressão inspiratória"
+      },
+      "live_set_pressure": {
+        "name": "Pressão alvo"
+      },
+      "live_leak": {
+        "name": "Vazamento"
+      },
+      "live_ramp_remaining": {
+        "name": "Rampa restante"
+      },
+      "night_date": {
+        "name": "Última noite"
+      },
+      "usage": {
+        "name": "Uso"
+      },
+      "mask_on_count": {
+        "name": "Máscara colocada/retirada"
+      },
+      "ahi": {
+        "name": "IAH"
+      },
+      "ai": {
+        "name": "Índice de apneia"
+      },
+      "hi": {
+        "name": "Índice de hipopneia"
+      },
+      "oai": {
+        "name": "Índice de apneia obstrutiva"
+      },
+      "cai": {
+        "name": "Índice de apneia central"
+      },
+      "uai": {
+        "name": "Índice de apneia não classificada"
+      },
+      "rin": {
+        "name": "Índice de RERA"
+      },
+      "leak_median": {
+        "name": "Vazamento mediano"
+      },
+      "leak_p95": {
+        "name": "Vazamento percentil 95"
+      },
+      "leak_max": {
+        "name": "Vazamento máximo"
+      },
+      "pressure_median": {
+        "name": "Pressão na máscara mediana"
+      },
+      "pressure_p95": {
+        "name": "Pressão na máscara percentil 95"
+      },
+      "pressure_max": {
+        "name": "Pressão na máscara máxima"
+      },
+      "resp_rate_median": {
+        "name": "Frequência respiratória mediana"
+      },
+      "resp_rate_p95": {
+        "name": "Frequência respiratória percentil 95"
+      },
+      "resp_rate_max": {
+        "name": "Frequência respiratória máxima"
+      },
+      "tidal_volume_median": {
+        "name": "Volume corrente mediano"
+      },
+      "tidal_volume_p95": {
+        "name": "Volume corrente percentil 95"
+      },
+      "minute_vent_median": {
+        "name": "Ventilação minuto mediana"
+      },
+      "minute_vent_p95": {
+        "name": "Ventilação minuto percentil 95"
+      },
+      "therapy_mode": {
+        "name": "Modo de terapia"
+      },
+      "min_pressure": {
+        "name": "Pressão mínima"
+      },
+      "max_pressure": {
+        "name": "Pressão máxima configurada"
+      },
+      "set_pressure": {
+        "name": "Pressão fixa"
+      },
+      "start_pressure": {
+        "name": "Pressão inicial"
+      },
+      "epr": {
+        "name": "EPR"
+      },
+      "epr_level": {
+        "name": "Nível de EPR"
+      },
+      "epr_type": {
+        "name": "Tipo de EPR"
+      },
+      "ramp": {
+        "name": "Rampa"
+      },
+      "ramp_time": {
+        "name": "Tempo de rampa"
+      },
+      "autoset_comfort": {
+        "name": "Conforto AutoSet"
+      },
+      "smart_start": {
+        "name": "SmartStart"
+      },
+      "smart_stop": {
+        "name": "SmartStop"
+      },
+      "mask_type": {
+        "name": "Tipo de máscara"
+      },
+      "tube_type": {
+        "name": "Tipo de tubo"
+      },
+      "antibacterial_filter": {
+        "name": "Filtro antibacteriano"
+      },
+      "climate_control": {
+        "name": "Climate control"
+      },
+      "humidifier": {
+        "name": "Umidificador"
+      },
+      "humidity_level": {
+        "name": "Nível de umidade"
+      },
+      "heated_tube": {
+        "name": "Tubo aquecido"
+      },
+      "tube_temperature": {
+        "name": "Temperatura do tubo"
+      },
+      "mask_sense": {
+        "name": "MaskSense"
+      },
+      "soundcheck": {
+        "name": "Frequência do SoundCheck"
+      },
+      "language": {
+        "name": "Idioma"
+      },
+      "temperature_unit": {
+        "name": "Unidade de temperatura"
+      },
+      "timezone": {
+        "name": "Fuso horário"
+      },
+      "settings_changed": {
+        "name": "Última alteração de configurações"
+      },
+      "reminder_mask": {
+        "name": "Lembrete de troca da máscara"
+      },
+      "reminder_tubing": {
+        "name": "Lembrete de troca do tubo"
+      },
+      "reminder_filter": {
+        "name": "Lembrete de troca do filtro"
+      },
+      "reminder_humidifier": {
+        "name": "Lembrete de troca do umidificador"
+      },
+      "therapy_hours": {
+        "name": "Horas de terapia"
+      },
+      "motor_hours": {
+        "name": "Horas de motor"
+      },
+      "machine_hours": {
+        "name": "Horas da máquina"
+      },
+      "motor_hours_since_service": {
+        "name": "Horas de motor desde a manutenção"
+      },
+      "last_therapy": {
+        "name": "Última terapia"
+      },
+      "last_service": {
+        "name": "Última manutenção"
+      },
+      "last_data_erase": {
+        "name": "Último apagamento de dados"
+      },
+      "bluetooth_firmware": {
+        "name": "Firmware Bluetooth"
+      },
+      "cellular_modem": {
+        "name": "Modem celular"
+      },
+      "bootloader": {
+        "name": "Bootloader"
+      },
+      "configuration": {
+        "name": "Configuração"
+      },
+      "csr": {
+        "name": "Respiração de Cheyne-Stokes"
+      },
+      "leak_p70": {
+        "name": "Vazamento percentil 70"
+      },
+      "target_pressure_median": {
+        "name": "Pressão alvo mediana"
+      },
+      "target_pressure_p95": {
+        "name": "Pressão alvo percentil 95"
+      },
+      "target_pressure_max": {
+        "name": "Pressão alvo máxima"
+      },
+      "target_epap_median": {
+        "name": "EPAP alvo mediana"
+      },
+      "target_epap_p95": {
+        "name": "EPAP alvo percentil 95"
+      },
+      "blower_pressure_p5": {
+        "name": "Pressão do soprador percentil 5"
+      },
+      "blower_pressure_p95": {
+        "name": "Pressão do soprador percentil 95"
+      },
+      "flow_p5": {
+        "name": "Fluxo percentil 5"
+      },
+      "flow_p95": {
+        "name": "Fluxo percentil 95"
+      },
+      "blower_flow_median": {
+        "name": "Fluxo do soprador mediano"
+      },
+      "ambient_humidity": {
+        "name": "Umidade ambiente"
+      },
+      "humidifier_temperature": {
+        "name": "Temperatura do umidificador"
+      },
+      "humidifier_power": {
+        "name": "Potência do umidificador"
+      },
+      "heated_tube_temperature": {
+        "name": "Temperatura medida do tubo aquecido"
+      },
+      "heated_tube_power": {
+        "name": "Potência do tubo aquecido"
+      },
+      "live_expiratory_pressure": {
+        "name": "Pressão expiratória"
+      },
+      "live_epr_pressure": {
+        "name": "Pressão EPR"
+      },
+      "live_resp_rate": {
+        "name": "Frequência respiratória"
+      },
+      "live_tidal_volume": {
+        "name": "Volume corrente"
+      },
+      "live_minute_vent": {
+        "name": "Ventilação minuto"
+      },
+      "live_flow_limitation": {
+        "name": "Limitação de fluxo"
+      },
+      "live_spo2": {
+        "name": "SpO2"
+      },
+      "live_heart_rate": {
+        "name": "Frequência cardíaca"
+      },
+      "live_motor_speed": {
+        "name": "Rotação do motor"
+      },
+      "live_heated_tube_power": {
+        "name": "Potência do tubo aquecido (ao vivo)"
+      },
+      "live_heated_tube_temperature": {
+        "name": "Temperatura do tubo aquecido (ao vivo)"
+      },
+      "humidifier_connected": {
+        "name": "Umidificador conectado"
+      },
+      "tube_connected": {
+        "name": "Tubo conectado"
+      },
+      "leak_alert": {
+        "name": "Alerta de vazamento"
+      },
+      "cellular_data_mode": {
+        "name": "Modo de dados celular"
+      },
+      "cellular_apn": {
+        "name": "APN celular"
+      },
+      "cellular_contact_period": {
+        "name": "Período de contato com a nuvem"
+      },
+      "last_cloud_upload": {
+        "name": "Último envio para a nuvem"
+      },
+      "cloud_upload_status": {
+        "name": "Status do envio para a nuvem"
+      },
+      "last_soundcheck": {
+        "name": "Último SoundCheck"
+      }
+    }
+  }
+}

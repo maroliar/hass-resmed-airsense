@@ -1,0 +1,64 @@
+blueprint:
+  name: CPAP therapy stopped at night (mask off alert)
+  description: >-
+    Runs your actions when the ResMed AirSense stops blowing during the night — usually because the mask came
+    off (AutoStop). Uses the *Therapy* binary sensor of the ResMed AirSense (local Bluetooth) integration.
+    Not a medical alarm; do not rely on it for safety.
+  domain: automation
+  source_url: https://github.com/maroliar/hass-resmed-airsense/blob/main/blueprints/automation/resmed_airsense/therapy_stopped_alert.yaml
+  input:
+    therapy_sensor:
+      name: Therapy sensor
+      selector:
+        entity:
+          filter:
+            - integration: resmed_airsense
+              domain: binary_sensor
+    after:
+      name: Only after
+      default: "22:00:00"
+      selector:
+        time: {}
+    before:
+      name: Only before
+      description: Stops sooner than this are treated as the normal end of the night.
+      default: "06:30:00"
+      selector:
+        time: {}
+    min_minutes:
+      name: Minimum therapy before alerting
+      description: Ignore stops that happen within this many minutes of starting (settling in, putting the mask on).
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 120
+          unit_of_measurement: min
+    actions:
+      name: Actions
+      description: What to do — e.g. play a soft sound on the bedroom speaker, notify your phone.
+      selector:
+        action: {}
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input therapy_sensor
+    from: "on"
+    to: "off"
+
+variables:
+  min_minutes: !input min_minutes
+
+conditions:
+  - condition: time
+    after: !input after
+    before: !input before
+  - condition: template
+    value_template: >-
+      {{ (as_timestamp(trigger.to_state.last_changed) - as_timestamp(trigger.from_state.last_changed)) / 60
+         >= min_minutes }}
+
+actions: !input actions

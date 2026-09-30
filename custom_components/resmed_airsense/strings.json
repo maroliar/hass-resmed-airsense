@@ -1,0 +1,378 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "description": "Choose the machine to pair.",
+        "data": {
+          "address": "Device"
+        }
+      },
+      "connect": {
+        "title": "Pair {name}",
+        "description": "Only one app can be paired with the machine: pairing Home Assistant replaces the myAir app's Bluetooth pairing (and pairing the app again disconnects Home Assistant). Your nightly reports keep arriving in the myAir app, which gets them from ResMed's cloud over the machine's cellular modem; only the app's Bluetooth features (mask-fit test, changing comfort settings from the phone) stop working.\n\nPut the machine in Bluetooth pairing mode, then press Submit. Home Assistant will connect to it."
+      },
+      "code": {
+        "title": "Enter the code",
+        "description": "Type the code now shown on the machine's screen.",
+        "data": {
+          "passkey": "Code"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the machine. Make sure it is on, in pairing mode, and in range of a Bluetooth adapter or an ESPHome Bluetooth proxy with active connections enabled.",
+      "invalid_code": "The machine rejected the code. Check the screen and try again."
+    },
+    "abort": {
+      "already_configured": "This machine is already configured.",
+      "no_devices_found": "No ResMed machine found over Bluetooth. Wake it up or enter pairing mode and try again.",
+      "reauth_successful": "Re-paired successfully."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "therapy": {
+        "name": "Therapy"
+      },
+      "connected": {
+        "name": "Connected"
+      }
+    },
+    "sensor": {
+      "fg_state": {
+        "name": "State"
+      },
+      "test_drive_state": {
+        "name": "Test drive"
+      },
+      "recoverable_error": {
+        "name": "Recoverable error"
+      },
+      "system_error": {
+        "name": "System error"
+      },
+      "live_mask_pressure": {
+        "name": "Mask pressure"
+      },
+      "live_inspiratory_pressure": {
+        "name": "Inspiratory pressure"
+      },
+      "live_set_pressure": {
+        "name": "Target pressure"
+      },
+      "live_leak": {
+        "name": "Leak"
+      },
+      "live_ramp_remaining": {
+        "name": "Ramp remaining"
+      },
+      "night_date": {
+        "name": "Last night"
+      },
+      "usage": {
+        "name": "Usage"
+      },
+      "mask_on_count": {
+        "name": "Mask on/off"
+      },
+      "ahi": {
+        "name": "AHI"
+      },
+      "ai": {
+        "name": "Apnea index"
+      },
+      "hi": {
+        "name": "Hypopnea index"
+      },
+      "oai": {
+        "name": "Obstructive apnea index"
+      },
+      "cai": {
+        "name": "Central apnea index"
+      },
+      "uai": {
+        "name": "Unclassified apnea index"
+      },
+      "rin": {
+        "name": "RERA index"
+      },
+      "leak_median": {
+        "name": "Leak median"
+      },
+      "leak_p95": {
+        "name": "Leak 95th percentile"
+      },
+      "leak_max": {
+        "name": "Leak max"
+      },
+      "pressure_median": {
+        "name": "Mask pressure median"
+      },
+      "pressure_p95": {
+        "name": "Mask pressure 95th percentile"
+      },
+      "pressure_max": {
+        "name": "Mask pressure max"
+      },
+      "resp_rate_median": {
+        "name": "Respiratory rate median"
+      },
+      "resp_rate_p95": {
+        "name": "Respiratory rate 95th percentile"
+      },
+      "resp_rate_max": {
+        "name": "Respiratory rate max"
+      },
+      "tidal_volume_median": {
+        "name": "Tidal volume median"
+      },
+      "tidal_volume_p95": {
+        "name": "Tidal volume 95th percentile"
+      },
+      "minute_vent_median": {
+        "name": "Minute ventilation median"
+      },
+      "minute_vent_p95": {
+        "name": "Minute ventilation 95th percentile"
+      },
+      "therapy_mode": {
+        "name": "Therapy mode"
+      },
+      "min_pressure": {
+        "name": "Minimum pressure"
+      },
+      "max_pressure": {
+        "name": "Maximum pressure"
+      },
+      "set_pressure": {
+        "name": "Set pressure"
+      },
+      "start_pressure": {
+        "name": "Start pressure"
+      },
+      "epr": {
+        "name": "EPR"
+      },
+      "epr_level": {
+        "name": "EPR level"
+      },
+      "epr_type": {
+        "name": "EPR type"
+      },
+      "ramp": {
+        "name": "Ramp"
+      },
+      "ramp_time": {
+        "name": "Ramp time"
+      },
+      "autoset_comfort": {
+        "name": "AutoSet comfort"
+      },
+      "smart_start": {
+        "name": "SmartStart"
+      },
+      "smart_stop": {
+        "name": "SmartStop"
+      },
+      "mask_type": {
+        "name": "Mask type"
+      },
+      "tube_type": {
+        "name": "Tube type"
+      },
+      "antibacterial_filter": {
+        "name": "Antibacterial filter"
+      },
+      "climate_control": {
+        "name": "Climate control"
+      },
+      "humidifier": {
+        "name": "Humidifier"
+      },
+      "humidity_level": {
+        "name": "Humidity level"
+      },
+      "heated_tube": {
+        "name": "Heated tube"
+      },
+      "tube_temperature": {
+        "name": "Tube temperature"
+      },
+      "mask_sense": {
+        "name": "MaskSense"
+      },
+      "soundcheck": {
+        "name": "SoundCheck frequency"
+      },
+      "language": {
+        "name": "Language"
+      },
+      "temperature_unit": {
+        "name": "Temperature unit"
+      },
+      "timezone": {
+        "name": "Time zone"
+      },
+      "settings_changed": {
+        "name": "Settings last changed"
+      },
+      "reminder_mask": {
+        "name": "Mask replacement reminder"
+      },
+      "reminder_tubing": {
+        "name": "Tubing replacement reminder"
+      },
+      "reminder_filter": {
+        "name": "Filter replacement reminder"
+      },
+      "reminder_humidifier": {
+        "name": "Humidifier replacement reminder"
+      },
+      "therapy_hours": {
+        "name": "Therapy hours"
+      },
+      "motor_hours": {
+        "name": "Motor hours"
+      },
+      "machine_hours": {
+        "name": "Machine hours"
+      },
+      "motor_hours_since_service": {
+        "name": "Motor hours since service"
+      },
+      "last_therapy": {
+        "name": "Last therapy"
+      },
+      "last_service": {
+        "name": "Last service"
+      },
+      "last_data_erase": {
+        "name": "Last data erase"
+      },
+      "bluetooth_firmware": {
+        "name": "Bluetooth firmware"
+      },
+      "cellular_modem": {
+        "name": "Cellular modem"
+      },
+      "bootloader": {
+        "name": "Bootloader"
+      },
+      "configuration": {
+        "name": "Configuration"
+      },
+      "csr": {
+        "name": "Cheyne-Stokes respiration"
+      },
+      "leak_p70": {
+        "name": "Leak 70th percentile"
+      },
+      "target_pressure_median": {
+        "name": "Target pressure median"
+      },
+      "target_pressure_p95": {
+        "name": "Target pressure 95th percentile"
+      },
+      "target_pressure_max": {
+        "name": "Target pressure max"
+      },
+      "target_epap_median": {
+        "name": "Target EPAP median"
+      },
+      "target_epap_p95": {
+        "name": "Target EPAP 95th percentile"
+      },
+      "blower_pressure_p5": {
+        "name": "Blower pressure 5th percentile"
+      },
+      "blower_pressure_p95": {
+        "name": "Blower pressure 95th percentile"
+      },
+      "flow_p5": {
+        "name": "Flow 5th percentile"
+      },
+      "flow_p95": {
+        "name": "Flow 95th percentile"
+      },
+      "blower_flow_median": {
+        "name": "Blower flow median"
+      },
+      "ambient_humidity": {
+        "name": "Ambient humidity"
+      },
+      "humidifier_temperature": {
+        "name": "Humidifier temperature"
+      },
+      "humidifier_power": {
+        "name": "Humidifier power"
+      },
+      "heated_tube_temperature": {
+        "name": "Heated tube temperature (measured)"
+      },
+      "heated_tube_power": {
+        "name": "Heated tube power"
+      },
+      "live_expiratory_pressure": {
+        "name": "Expiratory pressure"
+      },
+      "live_epr_pressure": {
+        "name": "EPR pressure"
+      },
+      "live_resp_rate": {
+        "name": "Respiratory rate"
+      },
+      "live_tidal_volume": {
+        "name": "Tidal volume"
+      },
+      "live_minute_vent": {
+        "name": "Minute ventilation"
+      },
+      "live_flow_limitation": {
+        "name": "Flow limitation"
+      },
+      "live_spo2": {
+        "name": "SpO2"
+      },
+      "live_heart_rate": {
+        "name": "Heart rate"
+      },
+      "live_motor_speed": {
+        "name": "Motor speed"
+      },
+      "live_heated_tube_power": {
+        "name": "Heated tube power (live)"
+      },
+      "live_heated_tube_temperature": {
+        "name": "Heated tube temperature (live)"
+      },
+      "humidifier_connected": {
+        "name": "Humidifier attached"
+      },
+      "tube_connected": {
+        "name": "Tube attached"
+      },
+      "leak_alert": {
+        "name": "Leak alert"
+      },
+      "cellular_data_mode": {
+        "name": "Cellular data mode"
+      },
+      "cellular_apn": {
+        "name": "Cellular APN"
+      },
+      "cellular_contact_period": {
+        "name": "Cloud contact period"
+      },
+      "last_cloud_upload": {
+        "name": "Last cloud upload"
+      },
+      "cloud_upload_status": {
+        "name": "Cloud upload status"
+      },
+      "last_soundcheck": {
+        "name": "Last SoundCheck"
+      }
+    }
+  }
+}

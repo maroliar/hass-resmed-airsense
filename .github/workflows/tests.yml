@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install test harness
+        run: |
+          pip install -r requirements_test.txt
+          # the bluetooth integration's own requirements (not pulled in by the harness)
+          python - <<'EOF' > bt_requirements.txt
+          import importlib.resources as r, json
+          base = r.files("homeassistant.components")
+          for c in ("bluetooth", "usb", "bluetooth_adapters"):
+              print("\n".join(json.loads((base / c / "manifest.json").read_text()).get("requirements", [])))
+          EOF
+          pip install -r bt_requirements.txt
+      - name: Protocol tests (no Home Assistant)
+        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests
+      - name: Integration tests (Home Assistant)
+        run: python -m pytest -q tests_ha -p no:cacheprovider

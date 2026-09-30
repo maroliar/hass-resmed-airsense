@@ -1,0 +1,29 @@
+# --- never public ---------------------------------------------------------------------------
+# credentials: pairing keys, HA token, Pi/ESPHome passwords
+secrets/
+*.local.json
+*.env
+
+# research: APK/native-lib analysis, BLE captures, SD-card copy (health data), probe dumps, internal notes
+research/
+
+# internal handoff/history (personal data, dev infrastructure)
+HISTORICO-MESTRE.md
+
+# dev-only probe scripts (hard-coded to the author's machine)
+poc/
+
+# --- build / tooling --------------------------------------------------------------------------
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+*.log
+
+# --- OS / editors -----------------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

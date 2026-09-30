@@ -1,0 +1,235 @@
+"""Async client for ResMed Air-family devices over an already-connected BleakClient.
+
+Transport-agnostic: works with a plain `bleak.BleakClient` (CLI / dev) or with the client
+returned by `bleak_retry_connector.establish_connection` inside Home Assistant.
+Read-only by design: only pairing, session, subscribe and Get are exposed.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import datetime as dt
+import itertools
+import json
+import logging
+from collections.abc import Callable
+from typing import Any
+
+from .protocol import (
+    ENCRYPTED_BIT,
+    RX_CHAR,
+    T_APP_ENC,
+    T_APP_PLAIN,
+    TX_CHAR,
+    Credentials,
+    Reassembler,
+    SessionCipher,
+    build_frame,
+    challenge_response,
+    encode_json,
+)
+from .srp import SrpClient
+
+_LOGGER = logging.getLogger(__name__)
+
+DEFAULT_TIMEOUT = 10.0
+DEFAULT_EVENTS = ("TestDriveState", "FGState", "RecoverableError", "SystemError")
+
+
+class AirSenseError(Exception):
+    """Protocol-level failure (error reply, timeout, bad handshake)."""
+
+
+class AuthError(AirSenseError):
+    """Credentials rejected / wrong passKey — re-pairing needed."""
+
+
+EventCallback = Callable[[str, Any, dict], None]  # (dataId, value, raw_event)
+NotificationCallback = Callable[[str, dict], None]  # (method, params) for SpoolFragment, StreamData, ...
+
+
+class AirSenseClient:
+    def __init__(
+        self,
+        ble_client: Any,
+        on_event: EventCallback | None = None,
+        on_notification: NotificationCallback | None = None,
+    ) -> None:
+        self._ble = ble_client
+        self._on_event = on_event
+        self._on_notification = on_notification
+        self._reasm = Reassembler()
+        self._cipher: SessionCipher | None = None
+        self._pending: dict[int, asyncio.Future] = {}
+        self._spools: dict[int, asyncio.Queue] = {}
+        self._ids = itertools.count(2)
+        self._write_size = 20
+
+    @property
+    def session_open(self) -> bool:
+        return self._cipher is not None
+
+    async def start(self) -> None:
+        backend = getattr(self._ble, "_backend", None)
+        if backend is not None and hasattr(backend, "_acquire_mtu"):
+            try:  # BlueZ starts at MTU 23 and would truncate long writes
+                await backend._acquire_mtu()
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+        self._write_size = max(20, (getattr(self._ble, "mtu_size", 23) or 23) - 3)
+        await self._ble.start_notify(RX_CHAR, self._on_notify)
+
+    async def stop(self) -> None:
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.cancel()
+        self._pending.clear()
+        try:
+            await self._ble.stop_notify(RX_CHAR)
+        except Exception:  # noqa: BLE001 - already disconnected
+            pass
+
+    # ---- handshakes -------------------------------------------------------------------
+
+    async def pair(self, passkey: str) -> Credentials:
+        """First-time pairing with the code shown on the device screen (SRP-6a).
+
+        Leaves an encrypted session open. The device assigns a new clientId each time;
+        any previous clientId for this client becomes invalid.
+        """
+        srp = SrpClient(passkey)
+        r = await self._call("StartKeyExchange", {"clientPk": srp.public_key_hex}, "2.0", req_id=1)
+        m1 = srp.process_challenge(r["serverPk"], r["salt"])
+        try:
+            r = await self._call("ConfirmKeyExchange", {"clientConfirmation": m1}, "2.0", req_id=1)
+        except AirSenseError as err:
+            raise AuthError(f"device rejected passKey: {err}") from err
+        mpk = srp.verify_server(r["serverConfirmation"])
+        self._cipher = SessionCipher(mpk, r["nonce"])
+        return Credentials(r["clientId"], mpk)
+
+    async def open_session(self, creds: Credentials) -> None:
+        """Reconnect with stored credentials (no screen code)."""
+        try:
+            r = await self._call("RequestSession", {"clientId": creds.client_id}, "2.0", req_id=1)
+        except AirSenseError as err:
+            raise AuthError(f"RequestSession rejected: {err}") from err
+        cipher = SessionCipher(creds.master_pair_key, r["nonce"])
+        resp = challenge_response(creds.master_pair_key, r["challenge"])
+        r = await self._call("CheckSessionIntegrity", {"response": resp}, "2.0", req_id=1)
+        if not r.get("confirmation"):
+            raise AuthError("CheckSessionIntegrity: confirmation false")
+        self._cipher = cipher
+
+    # ---- session requests (encrypted) ---------------------------------------------------
+
+    async def subscribe(self, data_ids: tuple[str, ...] = DEFAULT_EVENTS) -> dict:
+        return await self._call("SubscribeEvent", {"dataIds": list(data_ids)}, "1.0", encrypted=True)
+
+    async def get(self, *names: str) -> dict:
+        return await self._call("Get", list(names), "1.0", encrypted=True)
+
+    async def spool(self, address: str, since: dt.datetime, idle_timeout: float = 5.0) -> bytes:
+        """Reads a logged-data spool (e.g. "Summary") from `since`; returns the concatenated payload.
+
+        Fragments arrive back to back; a lost one (BLE proxies drop notifications under load) shows up
+        as a gap in `seq` or as silence, and raises AirSenseError so the caller can simply retry.
+        """
+        params = {
+            "maxSpoolSize": 65535,
+            "spoolAddress": {address: {"fromDateTime": since.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")}},
+        }
+        spool_id = (await self.call("StartSpool", params))["spoolId"]
+        queue: asyncio.Queue = asyncio.Queue()
+        self._spools[spool_id] = queue
+        try:
+            await self.call("PullSpoolFragments", {"maxFragmentSize": 2808, "maxNotifications": 0, "spoolId": spool_id})
+            chunks: dict[int, bytes] = {}
+            while True:
+                try:
+                    frag = await asyncio.wait_for(queue.get(), idle_timeout)
+                except TimeoutError as err:
+                    raise AirSenseError(f"spool {address}: stalled after {len(chunks)} fragment(s)") from err
+                seq = frag.get("seq", 0)
+                chunks[seq] = base64.b64decode(frag.get("data") or "")
+                status = frag.get("status", "")
+                _LOGGER.debug("spool %s #%s seq %s: %s", address, spool_id, seq, status)
+                if status == "ERROR_DATA_UNAVAILABLE":
+                    return b""
+                if status.startswith("SPOOL_COMPLETE"):
+                    if sorted(chunks) != list(range(seq + 1)):
+                        raise AirSenseError(f"spool {address}: missing fragment(s), got {sorted(chunks)}")
+                    return b"".join(chunks[k] for k in range(seq + 1))
+        finally:
+            self._spools.pop(spool_id, None)
+
+    # ---- plumbing ----------------------------------------------------------------------
+
+    async def call(self, method: str, params: Any = None, version: str = "1.0", timeout: float = DEFAULT_TIMEOUT) -> Any:
+        """Generic encrypted session request (read-only methods only, by convention)."""
+        return await self._call(method, params, version, encrypted=True, timeout=timeout)
+
+    async def _call(
+        self,
+        method: str,
+        params: Any,
+        version: str,
+        *,
+        req_id: int | None = None,
+        encrypted: bool = False,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> Any:
+        rid = req_id if req_id is not None else next(self._ids)
+        msg = {"id": rid, "jsonrpc": version, "method": method}
+        if params is not None:
+            msg["params"] = params
+        if encrypted:
+            if self._cipher is None:
+                raise AirSenseError("no session")
+            frame = build_frame(self._cipher.encrypt(msg), T_APP_ENC)
+        else:
+            frame = build_frame(encode_json(msg), T_APP_PLAIN)
+        fut = asyncio.get_running_loop().create_future()
+        self._pending[rid] = fut
+        try:
+            for i in range(0, len(frame), self._write_size):
+                await self._ble.write_gatt_char(TX_CHAR, frame[i : i + self._write_size], response=True)
+            reply = await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError as err:
+            raise AirSenseError(f"{method}: timeout") from err
+        finally:
+            self._pending.pop(rid, None)
+        if "error" in reply:
+            raise AirSenseError(f"{method}: {reply['error']}")
+        return reply.get("result")
+
+    def _on_notify(self, _char: Any, data: bytearray) -> None:
+        for typ, payload in self._reasm.feed(bytes(data)):
+            if typ & ENCRYPTED_BIT:
+                msg = self._cipher.decrypt(payload) if self._cipher else None
+            else:
+                try:
+                    msg = json.loads(payload.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    msg = None
+            if isinstance(msg, dict):
+                self._dispatch(msg)
+            else:
+                _LOGGER.debug("undecodable frame type %#06x (%d bytes)", typ, len(payload))
+
+    def _dispatch(self, msg: dict) -> None:
+        if "method" in msg and "id" not in msg:
+            p = msg.get("params", {})
+            if msg["method"] == "EventNotification" and self._on_event:
+                for ev in p.get("events", []):
+                    self._on_event(p.get("dataId"), ev.get("value"), ev)
+            elif msg["method"] == "SpoolFragment" and p.get("spoolId") in self._spools:
+                self._spools[p["spoolId"]].put_nowait(p)
+            elif msg["method"] != "HeartBeat" and self._on_notification:
+                self._on_notification(msg["method"], p)
+            return
+        if "method" in msg:  # echo of our own request
+            return
+        fut = self._pending.get(msg.get("id"))
+        if fut and not fut.done():
+            fut.set_result(msg)
