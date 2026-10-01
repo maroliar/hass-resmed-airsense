@@ -22,6 +22,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    AUTH_REJECTIONS_FOR_REAUTH,
     CONF_CLIENT_ID,
     CONF_MASTER_PAIR_KEY,
     DOMAIN,
@@ -167,16 +168,21 @@ class AirSenseCoordinator:
 
     async def _run(self) -> None:
         attempt = 0
+        rejected = 0  # consecutive explicit rejections
         while True:
             try:
                 await self._session()
-                attempt = 0
+                attempt = rejected = 0
             except AuthError as err:
-                # another client (e.g. the phone app) paired and took the only slot
-                _LOGGER.warning("%s: credentials rejected (%s); re-pairing needed", self.address, err)
-                self._set_connected(False)
-                self.entry.async_start_reauth(self.hass)
-                return
+                rejected += 1
+                if rejected >= AUTH_REJECTIONS_FOR_REAUTH:
+                    # another client (e.g. the phone app) paired and took the only slot
+                    _LOGGER.warning("%s: credentials rejected (%s); re-pairing needed", self.address, err)
+                    self._set_connected(False)
+                    self.entry.async_start_reauth(self.hass)
+                    return
+                _LOGGER.debug("%s: credentials rejected once (%s); retrying before asking to re-pair",
+                              self.address, err)
             except (AirSenseError, BleakError, TimeoutError) as err:
                 _LOGGER.debug("%s: link lost: %s", self.address, err)
             self._set_connected(False)

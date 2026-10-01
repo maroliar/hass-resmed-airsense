@@ -212,8 +212,12 @@ async def test_entities_and_event(hass: HomeAssistant, mock_ble) -> None:
 async def test_auth_error_starts_reauth(hass: HomeAssistant, mock_ble) -> None:
     mock_ble.open_session.side_effect = AuthError("VerificationFailure")
     entry = _entry(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    with patch("custom_components.resmed_airsense.coordinator.RECONNECT_BACKOFF", (0, 0, 0, 0, 0)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        await hass.async_block_till_done()
+    assert mock_ble.open_session.await_count == 2  # confirmed once more before bothering the user
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert flows and flows[0]["context"]["source"] == config_entries.SOURCE_REAUTH
     # user re-pairs from the reauth flow
@@ -224,6 +228,22 @@ async def test_auth_error_starts_reauth(hass: HomeAssistant, mock_ble) -> None:
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "reauth_successful"
     assert entry.data[CONF_CLIENT_ID] == "C0FFEE123456"
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_timeouts_never_start_reauth(hass: HomeAssistant, mock_ble) -> None:
+    """Regression (v0.1.0): a RequestSession timeout after a proxy reboot asked the user to re-pair."""
+    from custom_components.resmed_airsense.resmed_air_ble import AirSenseError
+
+    mock_ble.open_session.side_effect = AirSenseError("RequestSession: timeout")
+    entry = _entry(hass)
+    # zero backoff: attempts 1-3 run back to back, then the loop waits for an advertisement
+    with patch("custom_components.resmed_airsense.coordinator.RECONNECT_BACKOFF", (0, 0, 0, 0, 0)):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        for _ in range(50):
+            await asyncio.sleep(0)
+        assert mock_ble.open_session.await_count >= 3
+        assert not hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_diagnostics_redacts_secrets(hass: HomeAssistant, mock_ble) -> None:

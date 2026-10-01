@@ -38,3 +38,5 @@ STREAM_IDS = (
 )
 STREAM_REPORT_MS = 5000
 RECONNECT_BACKOFF = (5, 10, 30, 60, 120)  # s
+# a real rejection repeats on every attempt; asking the user for a new screen code needs it twice in a row
+AUTH_REJECTIONS_FOR_REAUTH = 2

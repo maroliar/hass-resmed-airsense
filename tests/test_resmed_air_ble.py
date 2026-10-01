@@ -325,3 +325,27 @@ def test_cloud_upload_and_soundcheck_logs():
     assert (ups[0].end - ups[0].start).total_seconds() == 25
     runs = parse_soundchecks(soundcheck_run(t) + soundcheck_run(t + 7 * 86_400_000))
     assert len(runs) == 2 and (runs[1] - runs[0]).days == 7
+
+
+def test_open_session_timeout_is_not_an_auth_error():
+    """Regression: a silent device (proxy hiccup) must not be reported as 'credentials rejected'."""
+    async def run():
+        dev = FakeDevice()
+        c = AirSenseClient(dev)
+        await c.start()
+        creds = await c.pair("1234")
+        orig = dev._handle
+        dev._handle = lambda m: None if m["method"] == "RequestSession" else orig(m)  # no answer at all
+        c2 = AirSenseClient(dev)
+        c2.timeout = 0.2
+        await c2.start()
+        with pytest.raises(AirSenseError) as exc:
+            await c2.open_session(creds)
+        assert not isinstance(exc.value, AuthError)
+        dev._handle = orig  # an unknown client is explicitly rejected (-11005) -> AuthError
+        c3 = AirSenseClient(dev)
+        await c3.start()
+        with pytest.raises(AuthError):
+            await c3.open_session(type(creds)("FFFFFFFFFFFF", creds.master_pair_key))
+
+    asyncio.run(run())

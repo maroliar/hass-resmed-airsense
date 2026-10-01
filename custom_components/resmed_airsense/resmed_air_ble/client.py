@@ -40,8 +40,22 @@ class AirSenseError(Exception):
     """Protocol-level failure (error reply, timeout, bad handshake)."""
 
 
+class RpcError(AirSenseError):
+    """The device answered with a JSON-RPC error (as opposed to not answering at all)."""
+
+    def __init__(self, method: str, error: dict) -> None:
+        super().__init__(f"{method}: {error}")
+        self.code = error.get("code") if isinstance(error, dict) else None
+
+
 class AuthError(AirSenseError):
-    """Credentials rejected / wrong passKey — re-pairing needed."""
+    """Credentials rejected / wrong passKey — re-pairing needed.
+
+    Only raised when the device explicitly says so; timeouts and lost frames stay AirSenseError (retry).
+    """
+
+
+VERIFICATION_FAILURE = -11005  # device reply when the clientId/key is not (or no longer) paired
 
 
 EventCallback = Callable[[str, Any, dict], None]  # (dataId, value, raw_event)
@@ -64,6 +78,7 @@ class AirSenseClient:
         self._spools: dict[int, asyncio.Queue] = {}
         self._ids = itertools.count(2)
         self._write_size = 20
+        self.timeout = DEFAULT_TIMEOUT  # per request
 
     @property
     def session_open(self) -> bool:
@@ -102,7 +117,7 @@ class AirSenseClient:
         m1 = srp.process_challenge(r["serverPk"], r["salt"])
         try:
             r = await self._call("ConfirmKeyExchange", {"clientConfirmation": m1}, "2.0", req_id=1)
-        except AirSenseError as err:
+        except RpcError as err:  # the device answered "no": wrong code
             raise AuthError(f"device rejected passKey: {err}") from err
         mpk = srp.verify_server(r["serverConfirmation"])
         self._cipher = SessionCipher(mpk, r["nonce"])
@@ -112,8 +127,10 @@ class AirSenseClient:
         """Reconnect with stored credentials (no screen code)."""
         try:
             r = await self._call("RequestSession", {"clientId": creds.client_id}, "2.0", req_id=1)
-        except AirSenseError as err:
-            raise AuthError(f"RequestSession rejected: {err}") from err
+        except RpcError as err:
+            if err.code == VERIFICATION_FAILURE:
+                raise AuthError(f"RequestSession rejected: {err}") from err
+            raise
         cipher = SessionCipher(creds.master_pair_key, r["nonce"])
         resp = challenge_response(creds.master_pair_key, r["challenge"])
         r = await self._call("CheckSessionIntegrity", {"response": resp}, "2.0", req_id=1)
@@ -165,7 +182,7 @@ class AirSenseClient:
 
     # ---- plumbing ----------------------------------------------------------------------
 
-    async def call(self, method: str, params: Any = None, version: str = "1.0", timeout: float = DEFAULT_TIMEOUT) -> Any:
+    async def call(self, method: str, params: Any = None, version: str = "1.0", timeout: float | None = None) -> Any:
         """Generic encrypted session request (read-only methods only, by convention)."""
         return await self._call(method, params, version, encrypted=True, timeout=timeout)
 
@@ -177,7 +194,7 @@ class AirSenseClient:
         *,
         req_id: int | None = None,
         encrypted: bool = False,
-        timeout: float = DEFAULT_TIMEOUT,
+        timeout: float | None = None,
     ) -> Any:
         rid = req_id if req_id is not None else next(self._ids)
         msg = {"id": rid, "jsonrpc": version, "method": method}
@@ -194,13 +211,13 @@ class AirSenseClient:
         try:
             for i in range(0, len(frame), self._write_size):
                 await self._ble.write_gatt_char(TX_CHAR, frame[i : i + self._write_size], response=True)
-            reply = await asyncio.wait_for(fut, timeout)
+            reply = await asyncio.wait_for(fut, timeout or self.timeout)
         except asyncio.TimeoutError as err:
             raise AirSenseError(f"{method}: timeout") from err
         finally:
             self._pending.pop(rid, None)
         if "error" in reply:
-            raise AirSenseError(f"{method}: {reply['error']}")
+            raise RpcError(method, reply["error"])
         return reply.get("result")
 
     def _on_notify(self, _char: Any, data: bytearray) -> None:
