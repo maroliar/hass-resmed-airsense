@@ -13,6 +13,7 @@ import itertools
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .protocol import (
@@ -46,6 +47,7 @@ class RpcError(AirSenseError):
     def __init__(self, method: str, error: dict) -> None:
         super().__init__(f"{method}: {error}")
         self.code = error.get("code") if isinstance(error, dict) else None
+        self.message = error.get("message") if isinstance(error, dict) else None
 
 
 class AuthError(AirSenseError):
@@ -60,6 +62,17 @@ VERIFICATION_FAILURE = -11005  # device reply when the clientId/key is not (or n
 
 EventCallback = Callable[[str, Any, dict], None]  # (dataId, value, raw_event)
 NotificationCallback = Callable[[str, dict], None]  # (method, params) for SpoolFragment, StreamData, ...
+
+@dataclass(frozen=True)
+class SpoolRead:
+    """Assembled spool payload plus the terminal fragment metadata the APK exposes."""
+
+    data: bytes
+    status: str
+    fragments: int
+    spool_hash: str | None = None
+    truncated: bool = False
+
 
 
 class AirSenseClient:
@@ -149,19 +162,92 @@ class AirSenseClient:
     async def spool(self, address: str, since: dt.datetime, idle_timeout: float = 5.0) -> bytes:
         """Reads a logged-data spool (e.g. "Summary") from `since`; returns the concatenated payload.
 
-        Fragments arrive back to back; a lost one (BLE proxies drop notifications under load) shows up
-        as a gap in `seq` or as silence, and raises AirSenseError so the caller can simply retry.
+        Fragments arrive back to back. A lost one (BLE proxies drop notifications under load) shows up
+        as a gap in `seq` or as silence and raises AirSenseError so the caller can retry. When the
+        device answers `SPOOL_COMPLETE_MORE_DATA_PENDING` (APK `ccg$c` / `i36`), this re-issues
+        `StartSpool` from `nextSpoolAddress.<Name>.fromDateTime` and keeps appending until
+        `SPOOL_COMPLETE_NO_MORE_DATA` (or an empty next address).
         """
+        return (await self.spool_read(address, since, idle_timeout=idle_timeout)).data
+
+    async def spool_read(
+        self,
+        address: str,
+        since: dt.datetime,
+        idle_timeout: float = 5.0,
+        max_bytes: int | None = None,
+    ) -> SpoolRead:
+        """Like `spool`, but keeps status / fragment count / hash and optionally caps payload size."""
+        from_dt = since.astimezone(dt.UTC)
+        assembled = bytearray()
+        seen_hashes: set[str] = set()
+        fragments = 0
+        status = ""
+        spool_hash: str | None = None
+        truncated = False
+        # Bound the resume chain so a buggy device cannot loop forever.
+        for _round in range(32):
+            payload, status, next_from, spool_hash, frag_count = await self._spool_once(
+                address, from_dt, idle_timeout
+            )
+            fragments += frag_count
+            if spool_hash:
+                if spool_hash in seen_hashes:
+                    _LOGGER.debug("spool %s: duplicate spoolHash %s; stopping resume", address, spool_hash)
+                    break
+                seen_hashes.add(spool_hash)
+            if max_bytes is not None and len(assembled) + len(payload) > max_bytes:
+                remain = max(0, max_bytes - len(assembled))
+                assembled.extend(payload[:remain])
+                truncated = True
+                break
+            assembled.extend(payload)
+            if status == "ERROR_DATA_UNAVAILABLE":
+                break
+            if status != "SPOOL_COMPLETE_MORE_DATA_PENDING":
+                break
+            if next_from is None:
+                _LOGGER.debug(
+                    "spool %s: MORE_DATA_PENDING without nextSpoolAddress.fromDateTime; stopping",
+                    address,
+                )
+                break
+            from_dt = next_from
+        return SpoolRead(
+            data=bytes(assembled),
+            status=status or "UNKNOWN",
+            fragments=fragments,
+            spool_hash=spool_hash,
+            truncated=truncated,
+        )
+
+    async def _spool_once(
+        self, address: str, since: dt.datetime, idle_timeout: float
+    ) -> tuple[bytes, str, dt.datetime | None, str | None, int]:
+        """One StartSpool + PullSpoolFragments cycle. Returns (payload, status, next_from, hash, frags)."""
+        # Request shape matches the APK: kl0.DEFAULT_MAX_SPOOL_SIZE = 4096 and GsonUtil.java:78-79
+        # (Joda UTC toString). On live AS11, 5 of 15 spool names (TherapyEvents, UsageEvents,
+        # SystemActivityEvents, SystemExceptionEvents, DiagnosticExceptionEvents) are refused with
+        # JSON-RPC -32602 Invalid Params; the other 10 succeed with this same shape. The cause is
+        # not established; tested live with 8 request variants (date range, timestamp format,
+        # without maxSpoolSize, without fromDateTime, multi-name); Summary succeeds under the
+        # same shapes.
         params = {
-            "maxSpoolSize": 65535,
-            "spoolAddress": {address: {"fromDateTime": since.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")}},
+            "maxSpoolSize": 4096,
+            "spoolAddress": {
+                address: {"fromDateTime": since.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")}
+            },
         }
         spool_id = (await self.call("StartSpool", params))["spoolId"]
         queue: asyncio.Queue = asyncio.Queue()
         self._spools[spool_id] = queue
         try:
-            await self.call("PullSpoolFragments", {"maxFragmentSize": 2808, "maxNotifications": 0, "spoolId": spool_id})
+            await self.call(
+                "PullSpoolFragments",
+                {"maxFragmentSize": 2808, "maxNotifications": 0, "spoolId": spool_id},
+            )
             chunks: dict[int, bytes] = {}
+            last_frag: dict[str, Any] = {}
             while True:
                 try:
                     frag = await asyncio.wait_for(queue.get(), idle_timeout)
@@ -170,15 +256,43 @@ class AirSenseClient:
                 seq = frag.get("seq", 0)
                 chunks[seq] = base64.b64decode(frag.get("data") or "")
                 status = frag.get("status", "")
+                last_frag = frag
                 _LOGGER.debug("spool %s #%s seq %s: %s", address, spool_id, seq, status)
                 if status == "ERROR_DATA_UNAVAILABLE":
-                    return b""
+                    return b"", status, None, frag.get("spoolHash"), len(chunks)
                 if status.startswith("SPOOL_COMPLETE"):
                     if sorted(chunks) != list(range(seq + 1)):
                         raise AirSenseError(f"spool {address}: missing fragment(s), got {sorted(chunks)}")
-                    return b"".join(chunks[k] for k in range(seq + 1))
+                    payload = b"".join(chunks[k] for k in range(seq + 1))
+                    return (
+                        payload,
+                        status,
+                        self._next_spool_from(address, last_frag),
+                        last_frag.get("spoolHash"),
+                        len(chunks),
+                    )
         finally:
             self._spools.pop(spool_id, None)
+
+
+    @staticmethod
+    def _next_spool_from(address: str, frag: dict[str, Any]) -> dt.datetime | None:
+        """Parse nextSpoolAddress.<Name>.fromDateTime from a complete spool fragment (APK ccg)."""
+        nxt = frag.get("nextSpoolAddress")
+        if not isinstance(nxt, dict):
+            return None
+        entry = nxt.get(address) or next(iter(nxt.values()), None)
+        if not isinstance(entry, dict):
+            return None
+        raw = entry.get("fromDateTime")
+        if not raw:
+            return None
+        try:
+            # Machine timestamps are ISO-8601; tolerate a trailing Z.
+            text = str(raw).replace("Z", "+00:00")
+            return dt.datetime.fromisoformat(text).astimezone(dt.UTC)
+        except ValueError:
+            return None
 
     # ---- plumbing ----------------------------------------------------------------------
 

@@ -25,6 +25,11 @@ from .const import (
     AUTH_REJECTIONS_FOR_REAUTH,
     CONF_CLIENT_ID,
     CONF_MASTER_PAIR_KEY,
+    CONF_SERIAL,
+    DIAGNOSTIC_SPOOL_BYTE_CAP,
+    DIAGNOSTIC_SPOOL_DAYS,
+    DIAGNOSTIC_SPOOL_IDLE_TIMEOUT,
+    DIAGNOSTIC_SPOOL_NAMES,
     DOMAIN,
     EVENT_IDS,
     EVENT_THERAPY_STOPPED,
@@ -39,9 +44,10 @@ from .const import (
     SUMMARY_INTERVAL,
     SUMMARY_RETRY,
 )
-from .resmed_air_ble import FG_THERAPY_STATES, AirSenseClient, AirSenseError, AuthError, Credentials
+from .resmed_air_ble import FG_THERAPY_STATES, AirSenseClient, AirSenseError, AuthError, Credentials, RpcError, normalize_fg_state
 from .resmed_air_ble.logs import CloudUpload, parse_cloud_uploads, parse_soundchecks
 from .resmed_air_ble.summary import DailySummary, last_night, parse_summary_spool
+from .summary_statistics import async_import_summary_statistics
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +90,10 @@ class AirSenseCoordinator:
         # last known non-live data, so sensors survive restarts and out-of-range periods
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}")
         self._summary_raw: str | None = None  # base64 of the last Summary spool
+        self.therapy_one_minute_raw: bytes | None = None
+        self.therapy_one_minute_start: dt.datetime | None = None
+        self._client: AirSenseClient | None = None
+        self._spool_lock = asyncio.Lock()
 
     # ---- lifecycle ----------------------------------------------------------------------
 
@@ -215,6 +225,7 @@ class AirSenseCoordinator:
             await client.start()
             await client.open_session(self.creds)
             await client.subscribe(EVENT_IDS)
+            self._client = client
             self._set_connected(True)
             _LOGGER.debug("%s: session open", self.address)
             await self._refresh_identity(client)
@@ -250,6 +261,11 @@ class AirSenseCoordinator:
                 if not done:  # quiet period: keepalive also catches half-open links
                     self._update_event("FGState", (await client.get("FGState")).get("FGState"))
         finally:
+            self._client = None
+            # Cancellation and unexpected failures must invalidate live state too.
+            # Keep cached Summary/settings/meters; disconnect is not zero usage.
+            self._set_connected(False)
+            self._clear_live()
             _LOGGER.debug("%s: session closed (disconnected=%s)", self.address, lost.is_set())
             await client.stop()
             with contextlib.suppress(Exception):
@@ -286,17 +302,21 @@ class AirSenseCoordinator:
         self._notify()
 
     async def _spool(self, client: AirSenseClient, address: str, days: int) -> bytes:
-        """Reads a spool, retrying right away: the proxy occasionally drops a notification."""
+        """Reads a spool by age, retrying immediately if a proxy drops a notification."""
         since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
-        attempt = 1
-        while True:
+        return await self._spool_since(client, address, since)
+
+    async def _spool_since(self, client: AirSenseClient, address: str, since: dt.datetime) -> bytes:
+        """Reads a spool from an exact timestamp, retrying a dropped notification."""
+        for attempt in range(1, SPOOL_ATTEMPTS + 1):
             try:
                 return await client.spool(address, since)
             except AirSenseError as err:
                 _LOGGER.debug("%s: %s spool attempt %d failed: %s", self.address, address, attempt, err)
                 if attempt == SPOOL_ATTEMPTS:
                     raise
-                attempt += 1
+        raise AssertionError("unreachable")
+
 
     async def _refresh_summary(self, client: AirSenseClient) -> bool:
         try:
@@ -306,9 +326,137 @@ class AirSenseCoordinator:
             return False
         if days:
             self._set_days(days)
+            await self._refresh_therapy_one_minute(client)
             self._save(raw)
             self._notify()
+            await self._import_summary_statistics()
         return True
+
+    async def _refresh_therapy_one_minute(self, client: AirSenseClient) -> None:
+        """Capture the opaque per-minute spool from the earliest recent therapy session.
+
+        last_night alone can be a short same-day session; start from the earliest session
+        among used days so the prior full night (and later minutes) are in the capture.
+        """
+        if self.data.therapy_running:
+            return
+        used = [d for d in self.data.days if d.usage_minutes > 0 and d.sessions]
+        if not used:
+            return
+        since = min(session.start for day in used for session in day.sessions)
+        if self.therapy_one_minute_start == since and self.therapy_one_minute_raw is not None:
+            return
+        try:
+            raw = await self._spool_since(client, "TherapyOneMinutePeriodic", since)
+        except (AirSenseError, ValueError, IndexError) as err:
+            _LOGGER.debug("%s: per-minute spool read failed: %s", self.address, err)
+            return
+        if raw:
+            self.therapy_one_minute_start = since
+            self.therapy_one_minute_raw = raw
+
+
+
+    async def async_capture_all_spools(self) -> dict[str, Any]:
+        """Pull every APK spool name once for diagnostics (one at a time, byte-capped).
+
+        Errors and DATA_UNAVAILABLE are recorded per name and do not abort the rest.
+        Normal Summary/TOMP polling is unchanged; this only runs on diagnostics download.
+        """
+        import hashlib
+
+        client = self._client
+        if client is None or not self.connected:
+            return {
+                "error": "not_connected",
+                "byte_cap": DIAGNOSTIC_SPOOL_BYTE_CAP,
+                "days": DIAGNOSTIC_SPOOL_DAYS,
+                "spools": {},
+            }
+        default_since = dt.datetime.now(dt.UTC) - dt.timedelta(days=DIAGNOSTIC_SPOOL_DAYS)
+        # Prefer earliest therapy session when known so Summary matches the night window.
+        session_since: dt.datetime | None = None
+        used = [d for d in self.data.days if d.usage_minutes > 0 and d.sessions]
+        if used:
+            session_since = min(session.start for day in used for session in day.sessions)
+        # TOMP stalled at 26 frags with a 30-day lookback (r1); the working path used the
+        # earliest used session only (coordinator._refresh_therapy_one_minute / 4fd3223).
+        tomp_since = session_since or default_since
+        since = default_since
+        if session_since is not None and session_since < since:
+            since = session_since
+        out: dict[str, Any] = {}
+        async with self._spool_lock:
+            for name in DIAGNOSTIC_SPOOL_NAMES:
+                name_since = tomp_since if name == "TherapyOneMinutePeriodic" else since
+                entry: dict[str, Any] = {
+                    "address": name,
+                    "requested_from": name_since.isoformat(),
+                    "byte_cap": DIAGNOSTIC_SPOOL_BYTE_CAP,
+                }
+                try:
+                    read = await client.spool_read(
+                        name,
+                        name_since,
+                        idle_timeout=DIAGNOSTIC_SPOOL_IDLE_TIMEOUT,
+                        max_bytes=DIAGNOSTIC_SPOOL_BYTE_CAP,
+                    )
+                except (AirSenseError, ValueError, IndexError, TypeError) as err:
+                    # -32602 Invalid Params: the device refuses this spool name (firmware, not a transport fault).
+                    refused = isinstance(err, RpcError) and err.code == -32602
+                    entry.update(
+                        {
+                            "status": "refused" if refused else "ERROR",
+                            "error": str(err),
+                            "raw_length": 0,
+                            "fragments": 0,
+                            "sha256": None,
+                            "raw_base64": None,
+                            "truncated": False,
+                            "envelope": None,
+                        }
+                    )
+                    if refused:
+                        entry["error_code"] = err.code
+                        entry["error_message"] = err.message
+                    out[name] = entry
+                    continue
+                raw = read.data
+                entry.update(
+                    {
+                        "status": read.status,
+                        "raw_length": len(raw),
+                        "fragments": read.fragments,
+                        "sha256": hashlib.sha256(raw).hexdigest() if raw else None,
+                        "raw_base64": base64.b64encode(raw).decode("ascii") if raw else None,
+                        "truncated": read.truncated,
+                        "spool_hash": read.spool_hash,
+                        "envelope": None,
+                    }
+                )
+                if raw:
+                    # Lazy import keeps coordinator free of diagnostics helper cycles.
+                    from .diagnostics import _protobuf_json_envelope
+
+                    entry["envelope"] = _protobuf_json_envelope(raw)
+                out[name] = entry
+        return {
+            "byte_cap": DIAGNOSTIC_SPOOL_BYTE_CAP,
+            "days": DIAGNOSTIC_SPOOL_DAYS,
+            "requested_from": since.isoformat(),
+            "spools": out,
+        }
+
+
+    async def _import_summary_statistics(self) -> None:
+        """Publish multi-night Summary values into HA long-term statistics graphs."""
+        if not self.data.days:
+            return
+        serial = self.entry.data.get(CONF_SERIAL) or self.address.replace(":", "").lower()
+        try:
+            async_import_summary_statistics(self.hass, serial, self.data.days)
+        except Exception as err:  # pragma: no cover - recorder may be absent in unit tests
+            _LOGGER.debug("%s: summary statistics import skipped: %s", self.address, err)
 
     async def _refresh_logs(self, client: AirSenseClient) -> None:
         """Cloud upload + SoundCheck logs; best effort (a failure just keeps the previous values)."""
@@ -346,6 +494,10 @@ class AirSenseCoordinator:
     def _update_event(self, data_id: str, value: Any) -> None:
         if value is None:
             return
+        if data_id == "FGState":
+            value = normalize_fg_state(value)
+            if value is None:
+                return
         prev = self.data.events.get(data_id)
         if prev == value:
             return
